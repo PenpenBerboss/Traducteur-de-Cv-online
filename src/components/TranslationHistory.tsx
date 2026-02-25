@@ -9,6 +9,7 @@ type DocumentWithTranslations = Document & {
 export default function TranslationHistory() {
   const [documents, setDocuments] = useState<DocumentWithTranslations[]>([]);
   const [loading, setLoading] = useState(true);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   useEffect(() => {
     loadDocuments();
@@ -59,16 +60,47 @@ export default function TranslationHistory() {
 
       if (error) throw error;
 
-      const url = URL.createObjectURL(data);
+      // Ensure we create a Blob with the correct MIME type so the file
+      // can be opened after download. We read the ArrayBuffer then
+      // create a new Blob with an explicit type.
+      const arrayBuffer = await data.arrayBuffer();
+      const isPdf = filename.toLowerCase().endsWith('.pdf');
+      const mime = isPdf
+        ? 'application/pdf'
+        : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      const blob = new Blob([arrayBuffer], { type: mime });
+
+      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+
+      // Revoke the URL after a short delay to ensure the browser
+      // has started the download / opened the file.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (error) {
       console.error('Error downloading file:', error);
+    }
+  };
+
+  const handlePreview = async (path: string) => {
+    try {
+      const { data, error } = await supabase.storage
+        .from('translations')
+        .download(path);
+
+      if (error) throw error;
+
+      const arrayBuffer = await data.arrayBuffer();
+      const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(url);
+    } catch (error) {
+      console.error('Error generating preview:', error);
     }
   };
 
@@ -157,18 +189,28 @@ export default function TranslationHistory() {
                   {translation.status === 'completed' && (
                     <div className="flex gap-2">
                       {translation.translated_pdf_path && (
-                        <button
-                          onClick={() =>
-                            handleDownload(
-                              translation.translated_pdf_path!,
-                              `${doc.original_filename.replace('.pdf', '')}_${translation.target_language}.pdf`
-                            )
-                          }
-                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2"
-                        >
-                          <Download className="w-4 h-4" />
-                          PDF
-                        </button>
+                        <>
+                          <button
+                            onClick={() =>
+                              handlePreview(translation.translated_pdf_path!)
+                            }
+                            className="px-3 py-2 bg-white border border-gray-200 hover:bg-gray-50 text-gray-800 text-sm font-medium rounded-lg transition-colors flex items-center gap-2"
+                          >
+                            Aperçu
+                          </button>
+                          <button
+                            onClick={() =>
+                              handleDownload(
+                                translation.translated_pdf_path!,
+                                `${doc.original_filename.replace('.pdf', '')}_${translation.target_language}.pdf`
+                              )
+                            }
+                            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2"
+                          >
+                            <Download className="w-4 h-4" />
+                            PDF
+                          </button>
+                        </>
                       )}
                       {translation.translated_word_path && (
                         <button
@@ -192,6 +234,31 @@ export default function TranslationHistory() {
           )}
         </div>
       ))}
+      {previewUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => {
+              URL.revokeObjectURL(previewUrl);
+              setPreviewUrl(null);
+            }}
+          />
+          <div className="relative bg-white w-[90%] h-[90%] rounded-lg overflow-hidden shadow-lg">
+            <div className="p-2 flex justify-end">
+              <button
+                onClick={() => {
+                  URL.revokeObjectURL(previewUrl);
+                  setPreviewUrl(null);
+                }}
+                className="px-3 py-1 bg-gray-100 rounded"
+              >
+                Fermer
+              </button>
+            </div>
+            <iframe src={previewUrl} className="w-full h-[calc(100%-40px)]" />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

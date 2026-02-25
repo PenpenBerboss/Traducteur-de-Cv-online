@@ -1,4 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.57.4';
+import PDFDocument from 'npm:pdfkit';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -50,41 +51,45 @@ async function extractTextFromPDF(pdfBuffer: ArrayBuffer): Promise<string> {
 }
 
 async function generatePDF(text: string): Promise<Uint8Array> {
-  const lines = text.split('\n');
-  const pdfLines = [
-    '%PDF-1.4',
-    '1 0 obj',
-    '<< /Type /Catalog /Pages 2 0 R >>',
-    'endobj',
-    '2 0 obj',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    'endobj',
-    '3 0 obj',
-    '<< /Type /Page /Parent 2 0 R /Resources 4 0 R /MediaBox [0 0 612 792] /Contents 5 0 R >>',
-    'endobj',
-    '4 0 obj',
-    '<< /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >>',
-    'endobj',
-    '5 0 obj',
-    '<< /Length 6 0 R >>',
-    'stream',
-    'BT',
-    '/F1 12 Tf',
-    '50 750 Td',
-    '14 TL',
-  ];
+  // Use PDFKit to create a valid PDF document from the translated text.
+  return new Promise<Uint8Array>((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ autoFirstPage: false });
+      const chunks: Uint8Array[] = [];
 
-  lines.forEach((line) => {
-    const escapedLine = line.replace(/[()\\]/g, '\\$&');
-    pdfLines.push(`(${escapedLine}) Tj`);
-    pdfLines.push('T*');
+      // Collect data chunks
+      // @ts-ignore - PDFKit emits 'data' and 'end' in a Node-style stream
+      doc.on('data', (chunk: Uint8Array) => chunks.push(chunk));
+      // @ts-ignore
+      doc.on('end', () => {
+        // concat Uint8Arrays
+        let length = 0;
+        for (const c of chunks) length += c.length;
+        const result = new Uint8Array(length);
+        let offset = 0;
+        for (const c of chunks) {
+          result.set(c, offset);
+          offset += c.length;
+        }
+        resolve(result);
+      });
+
+      // Add a page and write the text preserving line breaks
+      const pageOptions = { size: 'A4', margin: 50 };
+      doc.addPage(pageOptions);
+      doc.font('Helvetica');
+      doc.fontSize(12);
+
+      const lines = text.split('\n');
+      for (const line of lines) {
+        doc.text(line, { continued: false });
+      }
+
+      doc.end();
+    } catch (err) {
+      reject(err);
+    }
   });
-
-  pdfLines.push('ET', 'endstream', 'endobj');
-
-  const content = pdfLines.join('\n');
-  const encoder = new TextEncoder();
-  return encoder.encode(content);
 }
 
 async function generateDOCX(text: string): Promise<Uint8Array> {
